@@ -574,12 +574,65 @@ exports.getAllSpms = async (req, res) => {
       ];
     }
 
-    // 2. Build Sort Order
+    // 2. Build Sort Order & Query Execution
     // Default: Tanggal Descending (Newest first)
+    if (sortBy === 'completenessPercentage') {
+      const allSpms = await prisma.spm.findMany({
+        where: whereClause,
+        include: {
+          satker: { select: { nama: true } },
+          rincian: {
+            include: {
+              jawabanFlags: true,
+            },
+          },
+        },
+      });
+
+      await Promise.all(
+        allSpms.map(async (spm) => {
+          spm._count = { rincian: spm.rincian.length };
+          if (spm.rincian.length === 0) {
+            spm.completenessPercentage = 100;
+          } else {
+            const percentages = await Promise.all(
+              spm.rincian.map((rincian) => calculateRincianPercentage(rincian))
+            );
+            const totalPercentage = percentages.reduce((sum, p) => sum + p, 0);
+            spm.completenessPercentage = Math.round(
+              totalPercentage / spm.rincian.length
+            );
+          }
+          delete spm.rincian;
+        })
+      );
+
+      allSpms.sort((a, b) => {
+        if (order === 'asc') {
+          return a.completenessPercentage - b.completenessPercentage;
+        } else {
+          return b.completenessPercentage - a.completenessPercentage;
+        }
+      });
+
+      const totalSpms = allSpms.length;
+      const paginatedSpms = applyPagination
+        ? allSpms.slice(skip, skip + limitNum)
+        : allSpms;
+
+      return res.status(200).json({
+        spms: paginatedSpms,
+        totalCount: totalSpms,
+        totalPages: applyPagination ? Math.ceil(totalSpms / limitNum) : 1,
+        currentPage: pageNum,
+      });
+    }
+
     let orderBy = { tanggal: 'desc' };
 
-    if (sortBy && order) {
-      // Handle special cases or relations if needed, but for direct fields:
+    if (sortBy === 'satker') {
+      orderBy = { satker: { nama: order || 'asc' } };
+    } else if (sortBy && order) {
       orderBy = { [sortBy]: order };
     }
 
@@ -664,6 +717,18 @@ exports.getSpmById = async (req, res) => {
         );
       })
     );
+
+    if (spm.rincian.length === 0) {
+      spm.completenessPercentage = 100;
+    } else {
+      const totalPercentage = spm.rincian.reduce(
+        (sum, r) => sum + (r.persentaseKelengkapan || 0),
+        0
+      );
+      spm.completenessPercentage = Math.round(
+        totalPercentage / spm.rincian.length
+      );
+    }
 
     res.status(200).json(spm);
   } catch (error) {

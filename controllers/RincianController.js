@@ -19,12 +19,12 @@ async function calculateRincianPercentage(rincian) {
   return Math.min(100, percentage);
 }
 
-// @desc    Mendapatkan semua rincian (dengan filter dan PAGINATION by SPM)
+// @desc    Mendapatkan semua rincian (dengan filter, sorting, dan PAGINATION by SPM)
 // @route   GET /api/rincian
 exports.getAllRincian = async (req, res) => {
   try {
     // Accept pagination parameters, defaulting to 5 SPMs per page for this report
-    const { satkerId, tahun, page = 1, limit = 5 } = req.query;
+    const { satkerId, tahun, page = 1, limit = 5, sortBy, order, search } = req.query;
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     const skip = (pageNum - 1) * limitNum;
@@ -38,6 +38,26 @@ exports.getAllRincian = async (req, res) => {
     } else if (satkerId) {
       whereClause.satkerId = parseInt(satkerId, 10);
     }
+    if (search) {
+      whereClause.OR = [
+        { nomorSpm: { contains: search, mode: 'insensitive' } },
+        { rincian: { some: { uraian: { contains: search, mode: 'insensitive' } } } },
+      ];
+    }
+
+    // Determine SPM order
+    let spmOrderBy = { tanggal: 'desc' };
+    if (sortBy === 'satker') {
+      spmOrderBy = { satker: { nama: order || 'asc' } };
+    } else if (sortBy === 'nomorSpm') {
+      spmOrderBy = { nomorSpm: order || 'asc' };
+    } else if (sortBy === 'tanggal') {
+      spmOrderBy = { tanggal: order || 'desc' };
+    } else if (sortBy === 'totalAnggaran') {
+      spmOrderBy = { totalAnggaran: order || 'desc' };
+    } else if (sortBy === 'status') {
+      spmOrderBy = { status: order || 'asc' };
+    }
 
     // 1. Get the total count of SPMs that match the filter
     const totalSpms = await prisma.spm.count({ where: whereClause });
@@ -47,18 +67,25 @@ exports.getAllRincian = async (req, res) => {
       where: whereClause,
       skip: skip,
       take: limitNum,
-      orderBy: { tanggal: 'desc' },
+      orderBy: spmOrderBy,
       select: { id: true }, // We only need the IDs for the next step
     });
 
     const spmIdsOnPage = spmsOnPage.map((spm) => spm.id);
 
     // 3. Fetch all rincian that belong to those specific SPMs
+    let rincianOrderBy = undefined;
+    if (sortBy === 'jumlah') {
+      rincianOrderBy = { jumlah: order || 'desc' };
+    } else if (sortBy === 'kodeAkun') {
+      rincianOrderBy = { kodeAkun: { kode: order || 'asc' } };
+    }
+
     const allRincian = await prisma.spmRincian.findMany({
       where: {
         spmId: { in: spmIdsOnPage },
       },
-      orderBy: { spm: { tanggal: 'desc' } }, // Keep the overall sort order
+      orderBy: rincianOrderBy,
       include: {
         kodeAkun: true,
         jawabanFlags: true,
@@ -79,6 +106,14 @@ exports.getAllRincian = async (req, res) => {
         delete rincian.jawabanFlags;
       })
     );
+
+    if (sortBy === 'persentaseKelengkapan') {
+      allRincian.sort((a, b) =>
+        order === 'asc'
+          ? a.persentaseKelengkapan - b.persentaseKelengkapan
+          : b.persentaseKelengkapan - a.persentaseKelengkapan
+      );
+    }
 
     // 5. Return the rincian list and pagination info based on the total SPMs
     res.status(200).json({
