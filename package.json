@@ -22,6 +22,7 @@
     "express": "^5.1.0",
     "imap": "^0.8.19",
     "jsonwebtoken": "^9.0.2",
+    "jwks-rsa": "^4.1.0",
     "multer": "^2.0.2"
   },
   "devDependencies": {
